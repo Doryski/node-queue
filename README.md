@@ -59,8 +59,11 @@ Once installed, your test commands (vitest, jest, playwright) will automatically
 | `uninstall` | Remove PATH modification and LaunchAgent |
 | `build` | Build shims only (without PATH installation) |
 | `logs [-f] [-n N]` | Show daemon logs (use `-f` to follow) |
-| `install-project [-r]` | Patch node_modules/.bin (use `-r` for workspaces) |
+| `install-project [-r]` | Patch node_modules/.bin in the current project (auto-run by the pnpm/npm wrappers) |
 | `uninstall-project` | Remove patches from node_modules/.bin |
+| `patch-all --base <dir>` | Recursively patch every project under `<dir>`. Registers the base for future re-runs |
+| `patch-all` | Re-run `patch-all` against every previously registered base |
+| `patch-all --forget <dir>` | Remove a base from the registry |
 
 ## Configuration
 
@@ -77,6 +80,34 @@ Once installed, your test commands (vitest, jest, playwright) will automatically
 Default thresholds (in `src/config.ts`):
 - `maxOverallCpu`: 50% - Queue when overall CPU exceeds this
 - `maxSystemCpu`: 20% - Queue when system/kernel CPU exceeds this
+
+## Auto-Patch Wrappers
+
+The library only intercepts commands that go through the shims on your `PATH`. Locally-resolved binaries (anything in `./node_modules/.bin`, which is what `pnpm exec vitest`, `npm test`, and editor test runners use) are **not** intercepted until you patch them with `install-project`. To avoid running that manually after every `pnpm install`, `node-queue install` offers to add **pnpm/npm shell wrappers** to your shell rc file.
+
+When accepted, the installer appends a guarded block to `~/.zshrc` / `~/.bashrc` / fish config (wrapped in `# node-queue auto-patch wrappers` ... `# node-queue auto-patch wrappers end` markers):
+
+- `pnpm install|i|add` → runs the real `pnpm`, then runs `node-queue install-project -p .` if `./node_modules/.bin` exists
+- `npm install|i|add` → same, for npm
+
+**Opting out:** answer "no" to the prompt during `install`. **Removing later:** `node-queue uninstall` strips the block cleanly.
+
+### Bulk Patching Existing Projects
+
+For one-shot patching of every project under a directory (useful on a fresh machine, or after upgrading node-queue):
+
+```bash
+# Patch everything under ~/projects and register the base
+node-queue patch-all --base ~/projects
+
+# Later, re-run against all registered bases (e.g. after re-installing deps across many repos)
+node-queue patch-all
+
+# Stop tracking a base
+node-queue patch-all --forget ~/projects
+```
+
+Registered bases are stored at `~/.node-queue/config.json`. The walker skips `node_modules` (except the top-level `.bin` it finds), `.pnpm`, `.git`, `.next`, `dist`, `build`, and other common build/VCS directories.
 
 ## How It Works
 

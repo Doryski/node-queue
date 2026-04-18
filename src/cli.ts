@@ -29,6 +29,7 @@ import {
   INTERCEPTED_BINARIES,
 } from "./config.js";
 import type { StatusResponse } from "./types.js";
+import { readRegistry, walkForBinDirs, writeRegistry } from "./patch-utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -130,6 +131,8 @@ function detectShell(): { name: string; rcFile: string } | null {
 
 const PATH_EXPORT_MARKER = "# node-queue PATH";
 const ALIASES_MARKER = "# node-queue aliases";
+const WRAPPERS_MARKER = "# node-queue auto-patch wrappers";
+const WRAPPERS_END_MARKER = "# node-queue auto-patch wrappers end";
 
 function isPathInstalled(rcFile: string): boolean {
   if (!existsSync(rcFile)) return false;
@@ -142,6 +145,64 @@ function areAliasesInstalled(rcFile: string): boolean {
   const content = readFileSync(rcFile, "utf8");
   return content.includes(ALIASES_MARKER);
 }
+
+function areWrappersInstalled(rcFile: string): boolean {
+  if (!existsSync(rcFile)) return false;
+  const content = readFileSync(rcFile, "utf8");
+  return content.includes(WRAPPERS_MARKER);
+}
+
+function buildWrappersBlock(shellName: string): string {
+  if (shellName === "fish") {
+    return `${WRAPPERS_MARKER}
+function pnpm
+  command pnpm $argv
+  set -l code $status
+  if contains -- $argv[1] install i add; and test -d node_modules/.bin
+    echo "[node-queue] Auto-patching project..."
+    env NODE_QUEUE_BYPASS=1 node-queue install-project -p . 2>/dev/null
+  end
+  return $code
+end
+
+function npm
+  command npm $argv
+  set -l code $status
+  if contains -- $argv[1] install i add; and test -d node_modules/.bin
+    echo "[node-queue] Auto-patching project..."
+    env NODE_QUEUE_BYPASS=1 node-queue install-project -p . 2>/dev/null
+  end
+  return $code
+end
+${WRAPPERS_END_MARKER}
+`;
+  }
+
+  // bash / zsh
+  return `${WRAPPERS_MARKER}
+pnpm() {
+  command pnpm "$@"
+  local code=$?
+  if [[ "$1" =~ ^(install|i|add)$ ]] && [[ -d "node_modules/.bin" ]]; then
+    echo "[node-queue] Auto-patching project..."
+    NODE_QUEUE_BYPASS=1 node-queue install-project -p . 2>/dev/null
+  fi
+  return $code
+}
+
+npm() {
+  command npm "$@"
+  local code=$?
+  if [[ "$1" =~ ^(install|i|add)$ ]] && [[ -d "node_modules/.bin" ]]; then
+    echo "[node-queue] Auto-patching project..."
+    NODE_QUEUE_BYPASS=1 node-queue install-project -p . 2>/dev/null
+  fi
+  return $code
+}
+${WRAPPERS_END_MARKER}
+`;
+}
+
 
 program
   .name("node-queue")
@@ -507,6 +568,32 @@ alias nqkillall="killall node 2>/dev/null; echo 'Killed all node processes'"
       }
     }
 
+    // Ask about auto-patch wrappers (pnpm/npm shell functions)
+    if (areWrappersInstalled(shell.rcFile)) {
+      prompts.log.warn("Auto-patch wrappers already configured");
+    } else {
+      const installWrappers = await prompts.confirm({
+        message:
+          "Install pnpm/npm wrappers that auto-patch node_modules/.bin after install?",
+        initialValue: true,
+      });
+
+      if (prompts.isCancel(installWrappers)) {
+        prompts.outro("Installation cancelled");
+        process.exit(0);
+      }
+
+      if (installWrappers) {
+        appendFileSync(
+          shell.rcFile,
+          "\n" + buildWrappersBlock(shell.name),
+        );
+        prompts.log.success(
+          `Added pnpm/npm auto-patch wrappers to ${shell.rcFile}`,
+        );
+      }
+    }
+
     prompts.outro("Installation complete! Restart your shell to activate.");
     console.log("\nIntercepted commands:", INTERCEPTED_BINARIES.join(", "));
     console.log("To test: node -e \"console.log('test')\"");
@@ -545,30 +632,64 @@ program
       prompts.log.success("Removed LaunchAgent");
     }
 
-    // Remove PATH and aliases from shell config
+    // Remove PATH, aliases, and wrappers from shell config
     const shell = detectShell();
     if (shell && existsSync(shell.rcFile)) {
       const content = readFileSync(shell.rcFile, "utf8");
       const lines = content.split("\n");
-      let skipUntilEmpty = false;
-      const filtered = lines.filter((line, i, arr) => {
-        // Skip PATH marker and following line
-        if (line.includes(PATH_EXPORT_MARKER)) return false;
-        if (i > 0 && arr[i - 1]?.includes(PATH_EXPORT_MARKER)) return false;
+      const filtered: string[] = [];
+      let skipAliasesUntilNonAlias = false;
+      let skipWrappersUntilEnd = false;
 
-        // Skip aliases block (marker + all alias lines until empty line)
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        const prev = lines[i - 1] ?? "";
+
+        // Wrappers block: remove everything between marker and end marker (inclusive)
+        if (line.includes(WRAPPERS_MARKER) && !line.includes(WRAPPERS_END_MARKER)) {
+          skipWrappersUntilEnd = true;
+          continue;
+        }
+        if (skipWrappersUntilEnd) {
+          if (line.includes(WRAPPERS_END_MARKER)) {
+            skipWrappersUntilEnd = false;
+          }
+          continue;
+        }
+
+        // PATH marker and following line
+        if (line.includes(PATH_EXPORT_MARKER)) continue;
+        if (prev.includes(PATH_EXPORT_MARKER)) continue;
+
+        // Aliases block (marker + all alias lines until a non-alias line)
         if (line.includes(ALIASES_MARKER)) {
-          skipUntilEmpty = true;
-          return false;
+          skipAliasesUntilNonAlias = true;
+          continue;
         }
-        if (skipUntilEmpty) {
-          if (line.startsWith("alias nq")) return false;
-          skipUntilEmpty = false;
+        if (skipAliasesUntilNonAlias) {
+          if (line.startsWith("alias nq")) continue;
+          skipAliasesUntilNonAlias = false;
         }
-        return true;
-      });
+
+        filtered.push(line);
+      }
       writeFileSync(shell.rcFile, filtered.join("\n"));
-      prompts.log.success(`Removed PATH and aliases from ${shell.rcFile}`);
+      prompts.log.success(
+        `Removed PATH, aliases, and wrappers from ${shell.rcFile}`,
+      );
+    }
+
+    // Offer to clear the patch-all registry
+    const registry = readRegistry();
+    if (registry.patchAllBases.length > 0) {
+      const forget = await prompts.confirm({
+        message: `Forget ${registry.patchAllBases.length} registered patch-all base(s)?`,
+        initialValue: false,
+      });
+      if (!prompts.isCancel(forget) && forget) {
+        writeRegistry({ patchAllBases: [] });
+        prompts.log.success("Cleared patch-all registry");
+      }
     }
 
     prompts.outro("Uninstallation complete. Restart your shell.");
@@ -802,6 +923,99 @@ program
     }
 
     console.log(`\nRestored ${restored} binaries`);
+  });
+
+function runPatchAllForBase(base: string): { dirs: number; patched: number } {
+  const binDirs = walkForBinDirs(base);
+  if (binDirs.length === 0) {
+    console.log(`  (no node_modules/.bin found under ${base})`);
+    return { dirs: 0, patched: 0 };
+  }
+  let patched = 0;
+  for (const binDir of binDirs) {
+    const relPath = binDir
+      .replace(base, ".")
+      .replace("/node_modules/.bin", "");
+    console.log(`${relPath || "(root)"}:`);
+    patched += patchBinDir(binDir, false);
+  }
+  console.log(
+    `\n  → ${binDirs.length} project(s), ${patched} binary patch(es) under ${base}\n`,
+  );
+  return { dirs: binDirs.length, patched };
+}
+
+program
+  .command("patch-all")
+  .description(
+    "Recursively patch every node_modules/.bin under a base directory. Registers the base for re-runs.",
+  )
+  .option("-b, --base <dir>", "Base directory to walk and patch")
+  .option("-f, --forget <dir>", "Remove a registered base directory")
+  .action((options: { base?: string; forget?: string }) => {
+    const registry = readRegistry();
+
+    if (options.forget) {
+      const abs = resolve(options.forget);
+      const before = registry.patchAllBases.length;
+      registry.patchAllBases = registry.patchAllBases.filter((b) => b !== abs);
+      writeRegistry(registry);
+      const after = registry.patchAllBases.length;
+      console.log(
+        before === after
+          ? `Base not registered: ${abs}`
+          : `Forgot base: ${abs}`,
+      );
+      console.log(`Registered bases: ${after}`);
+      return;
+    }
+
+    if (options.base) {
+      const abs = resolve(options.base);
+      if (!existsSync(abs)) {
+        console.error(`Base directory does not exist: ${abs}`);
+        process.exit(1);
+      }
+      console.log(`Patching under ${abs}...\n`);
+      const { dirs, patched } = runPatchAllForBase(abs);
+
+      if (!registry.patchAllBases.includes(abs)) {
+        registry.patchAllBases.push(abs);
+        writeRegistry(registry);
+        console.log(`Registered base: ${abs}`);
+      }
+      console.log(
+        `Total: ${dirs} project(s), ${patched} binary patch(es). Registered bases: ${registry.patchAllBases.length}.`,
+      );
+      return;
+    }
+
+    // No args: run against all registered bases
+    if (registry.patchAllBases.length === 0) {
+      console.log(
+        "No registered bases. Run 'node-queue patch-all --base <dir>' first.",
+      );
+      return;
+    }
+
+    console.log(
+      `Re-running patch-all against ${registry.patchAllBases.length} registered base(s)...\n`,
+    );
+    let totalDirs = 0;
+    let totalPatched = 0;
+    for (const base of registry.patchAllBases) {
+      if (!existsSync(base)) {
+        console.log(`  (skipping missing base: ${base})\n`);
+        continue;
+      }
+      console.log(`=== ${base} ===`);
+      const { dirs, patched } = runPatchAllForBase(base);
+      totalDirs += dirs;
+      totalPatched += patched;
+    }
+    console.log(
+      `Total: ${totalDirs} project(s), ${totalPatched} binary patch(es) across ${registry.patchAllBases.length} base(s).`,
+    );
   });
 
 program.parse();

@@ -19,6 +19,7 @@ export const config: DaemonConfig = {
 
 export const NODE_QUEUE_DIR_PATH = NODE_QUEUE_DIR;
 export const SHIM_BIN_DIR = join(NODE_QUEUE_DIR, "bin");
+export const REGISTRY_PATH = join(NODE_QUEUE_DIR, "config.json");
 
 // Binaries to intercept (only test runners - avoid node/npx/pnpm which cause cascading issues)
 export const INTERCEPTED_BINARIES = ["vitest", "jest", "playwright"] as const;

@@ -61,6 +61,10 @@ export type DaemonResponse =
   | { type: "rejected"; reason: string }
   | { type: "error"; message: string };
 
+export type RegistryFile = {
+  patchAllBases: string[];
+};
+
 export type StatusResponse = {
   queueLength: number;
   queuedProcesses: Array<{
