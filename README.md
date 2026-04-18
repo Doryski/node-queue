@@ -148,6 +148,24 @@ const queue = createProcessQueue(100);
 
 > **Note**: The `install` command's LaunchAgent setup is macOS-only. On Linux, you'll need to manage the daemon process yourself (e.g., via systemd or a process manager).
 
+## Releasing
+
+Releases are driven by a git tag and published automatically by GitHub Actions.
+
+```bash
+pnpm release
+```
+
+The interactive script:
+
+1. Verifies the working tree is clean and you're on `main`.
+2. Proposes the next patch version (based on the latest `v*` tag) — you can override.
+3. Bumps `package.json`, commits, tags `vX.Y.Z`, and pushes both.
+
+On tag push, `.github/workflows/release.yml` runs build + lint + tests, verifies `package.json` matches the tag, then publishes to npm with provenance and creates a GitHub Release with auto-generated notes.
+
+**One-time setup:** add an `NPM_TOKEN` repository secret (create an automation token at https://www.npmjs.com/settings/~/tokens, scope `Automation` or `Publish`).
+
 ## License
 
 MIT
