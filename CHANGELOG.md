@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-18
+
+### Added
+
+- `patch-all [--base <dir>] [--forget <dir>]` command that recursively patches every `node_modules/.bin` under a base directory, with persistent registry at `~/.node-queue/config.json` so a bare `patch-all` re-runs against every registered base
+- Optional `pnpm` / `npm` shell wrappers injected during `node-queue install` that auto-run `install-project` after `install` / `i` / `add` (prompted, default yes)
+- Tag-triggered release workflow (`.github/workflows/release.yml`) and interactive `pnpm release` script that bumps `package.json`, commits, tags, and pushes — GitHub Actions handles the npm publish with provenance
+
+### Changed
+
+- `node-queue uninstall` now strips the auto-patch wrappers block and can optionally clear the patch-all registry
+
 ## [0.1.0] - 2026-04-14
 
 ### Added

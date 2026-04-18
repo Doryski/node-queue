@@ -1,6 +1,6 @@
 {
   "name": "@doryski/node-queue",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CPU-based process queue daemon that throttles test runners (vitest, jest, playwright) to prevent system overload. macOS only.",
   "type": "module",
   "main": "dist/index.js",
@@ -39,11 +39,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/doryski/node-queue.git"
+    "url": "git+https://github.com/Doryski/node-queue.git"
   },
-  "homepage": "https://github.com/doryski/node-queue#readme",
+  "homepage": "https://github.com/Doryski/node-queue#readme",
   "bugs": {
-    "url": "https://github.com/doryski/node-queue/issues"
+    "url": "https://github.com/Doryski/node-queue/issues"
   },
   "engines": {
     "node": ">=18"
